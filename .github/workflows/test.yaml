@@ -18,17 +18,6 @@ jobs:
       shell: bash
       run: exit 0
 
-    - name: get ADR number
-      id: next
-      shell: bash
-      run: |
-        mkdir -p docs/adrs
-        LAST_ADR=$(ls docs/adrs/*.md | grep -Eo "/[0-9]+-" | sort | tail -n1 | grep -Eo "[0-9]+")
-        LAST_ADR=$(echo "$LAST_ADR" | sed -E 's/^0+//')
-        NEXT_ADR=$(($LAST_ADR + 1))
-        NEXT_ADR=$(printf "%04i" "$NEXT_ADR")
-        echo "number=$NEXT_ADR" >> "$GITHUB_OUTPUT"
-
     - name: get date
       id: date
       shell: bash
