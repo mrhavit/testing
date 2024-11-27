@@ -1,66 +1,69 @@
-name: ADR accepted
+name: Create JIRA tickets
 
 on:
   issues:
-    types:
-      - closed
+    types: [opened, reopened]
 
-permissions:
-  contents: read
+  pull_request:
+    types: [opened]
 
 jobs:
-  accept:
+  create_ticket_from_issue:
+    name: Create JIRA ticket
     runs-on: ubuntu-latest
     steps:
+      - name: Login
+        uses: atlassian/gajira-login@master
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 
-    - name: check for tags
-      if: "${{ !contains(github.event.issue.labels.*.name, 'ADR: accepted' )}}"
-      shell: bash
-      run: exit 0
+      - name: Set event vars
+        id: event
+        run: |
+          if [ ${{github.event.issue}} ]; then 
+            echo "::set-output name=SUMMARY::GITHUB ISSUE #${{github.event.issue.number}} ${{github.event.issue.title}}"
+            echo "::set-output name=DESC::${{github.event.issue.html_url}} \n\n ${{github.event.issue.body}}"
+            echo "::set-output name=ISSUE_TYPE::Bug"
+            echo "::set-output name=LABEL::issue"
+            echo "::set-output name=USER::${{github.event.issue.user.login}}"
+          elif [ ${{github.event.pull_request}} ]; then 
+            echo "::set-output name=SUMMARY::PR #${{github.event.pull_request.number}} ${{github.event.pull_request.title}}"
+            echo "::set-output name=DESC::${{github.event.pull_request.html_url}} \n\n ${{github.event.pull_request.body}}"
+            echo "::set-output name=ISSUE_TYPE::Task"
+            echo "::set-output name=LABEL::pr"
+            echo "::set-output name=USER::${{github.event.pull_request.user.login}}"
+          fi
+      - name: Debug event
+        run: |
+          echo "SUMMARY ${{steps.event.outputs.SUMMARY}}"
+          echo "DESC ${{steps.event.outputs.DESC}}"
 
-    - name: get date
-      id: date
-      shell: bash
-      run: echo "date=$(date +'%B %d, %Y')" >> "$GITHUB_OUTPUT"
+      - name: Create ticket
+        id: create
+        uses: atlassian/gajira-create@master
+        with:
+          project: LABS
+          issuetype: ${{steps.event.outputs.ISSUE_TYPE}}
+          summary: ${{steps.event.outputs.SUMMARY}}
+          description: ${{steps.event.outputs.DESC}}
+          fields: '{"labels": ["github", "${{steps.event.outputs.LABEL}}"], "customfield_10135": "fwitter"}'
 
-    - name: build filename
-      id: filename
-      shell: bash
-      run: |
-        SLUG=$(printf '%q\n' "${{ github.event.issue.title }}" | tr A-Z a-z)
-        SLUG=$(printf '%q\n' "$SLUG" | iconv -c -t ascii//TRANSLIT)
-        SLUG=$(printf '%q\n' "$SLUG" | sed -E 's/[^a-z0-9]+/-/g' | sed -E 's/-+/-/g' | sed -E 's/^-+|-+$//g')
+      - name: Set triage state
+        if: ${{ steps.create.outputs.issue }}
+        uses: atlassian/gajira-transition@master
+        with:
+          issue: ${{ steps.create.outputs.issue }}
+          transition: "TRIAGE"
 
-        FILENAME="docs/adrs/${{ steps.next.outputs.number }}-$SLUG.md"
-        echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
-        echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
+      - name: Create comment
+        if: ${{ github.event.issue }}
+        uses: peter-evans/create-or-update-comment@v1
+        with:
+          issue-number: ${{github.event.issue.number}}
+          body: Internal ticket number is ${{steps.create.outputs.issue}}
 
-    - name: write the ADR
-      uses: DamianReeves/write-file-action@v1.2
-      with:
-        path: ${{ steps.filename.outputs.filename }}
-        write-mode: overwrite
-        contents: |
-          # ${{ github.event.issue.title }}
-
-          Status: Accepted
-          Date: ${{ steps.date.outputs.date }}
-
-          ${{ github.event.issue.body }}
-
-    - name: branch, commit, and open PR
-      shell: bash
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        BRANCH="adr/auto/${{ steps.filename.outputs.slug }}"
-        git config --global user.email "tts@gsa.gov"
-        git config --global user.name "Notify ADR Automation"
-        git checkout -b $BRANCH
-        git add docs/adrs/*.md
-        git commit -m "add ADR ${{ steps.next.outputs.number }}: ${{ github.event.issue.title }}"
-        git push -f origin $BRANCH
-        gh pr create \
-          --title "Add ADR ${{ steps.next.outputs.number }} to the repo" \
-          --body "This pull request was opened automatically because #${{ github.event.issue.number }} was closed after being marked as an approved ADR. It contains a markdown file capturing the ADR body at the time the issue was closed. Please verify that the markdown is correct before merging!" || true
-        gh pr merge $BRANCH --auto --squash || true
+      - name: Created issue
+        if: ${{ steps.create.outputs.issue }}
+        run: echo "Issue ${{ steps.create.outputs.issue }} was created"
