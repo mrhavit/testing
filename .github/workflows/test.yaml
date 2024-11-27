@@ -25,7 +25,6 @@ jobs:
   get_ab_id:
     name: Get AB ID
     runs-on: ubuntu-latest
-    needs: validation
     outputs:
       abid: ${{ steps.get.outputs.id }}
     steps:
