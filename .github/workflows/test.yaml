@@ -1,59 +1,91 @@
-name: Pull Request Validation
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, edited]
-    branches: [master]
-jobs:
-  # Count the number of commits in a pull request. This can be
-  # disabled by adding a trailer line of the following form to the
-  # pull request message:
-  #
-  #    Disable-Check: commit-count
-  #
-  # The check is case-insensitive and ignores other contents on the
-  # line as well, so it is possible to add several different checks if
-  # that is necessary.
-  #
-  # It is assumed that the trailer is following RFC2822 conventions,
-  # but this is currently not enforced.
-  count_commits:
-    name: Enforce single commit pull request
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout source
-      uses: actions/checkout@v2
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
-        fetch-depth: 0
-    - name: Dump GitHub context (for debugging)
-      env:
-        GITHUB_CONTEXT: ${{ toJSON(github) }}
-      run: |
-        echo "GITHUB_CONTEXT: $GITHUB_CONTEXT"
-    - name: Check number of commits
-      shell: bash --norc --noprofile {0}
-      # If this becomes more advanced, we might be better of using,
-      # e.g., Perl.
-      run: |
-        cat << "EOF" | egrep -qsi '^disable-check:.*\<commit-count\>' 
-        ${{ github.event.pull_request.body }}
-        EOF
-        if [[ $? -ne 0 ]]; then
-          base=${{ github.event.pull_request.base.sha }}
-          head=${{ github.event.pull_request.head.sha }}
-          count=`git rev-list --count $base..$head`
-          if [[ "$count" -ne 1 ]]; then
-            echo "Found $count commits in pull request (there should be only one):"
-            git log --format=format:'- %h %s' $base..$head
-            echo
-            echo "To disable commit count, add this trailer to pull request message:"
-            echo
-            echo "Disable-check: commit-count"
-            echo
-            echo "Trailers follow RFC2822 conventions, so no whitespace"
-            echo "before field name and the check is case-insensitive for"
-            echo "both the field name and the field body."
-            exit 1
-          fi
-        fi
+name: Pull Request Reviewer
 
+on:
+  workflow_call:
+    secrets:
+      SLACK_TOKEN:
+        required: true
+      CROSS_REPO_TOKEN:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+      SLACK_CHANNEL_GIT_SECURITY:
+        required: true
+
+jobs:
+  pr_reviewer_job:
+    runs-on: ubuntu-latest
+    name: A job to review pull request descriptions
+    steps:
+      - name: Checkout caller-repo
+        uses: actions/checkout@v4
+
+      - name: Checkout firefliesai/.github
+        uses: actions/checkout@v4
+        with:
+          repository: firefliesai/.github
+          path: firefliesai
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/scripts/PR_reviewer.js
+
+      - name: Save current PR description to file
+        id: save_pr_description
+        continue-on-error: true
+        run: printf "%q" "$(echo ${{ github.event.pull_request.body }})" > ${{ github.workspace }}/firefliesai/.github/PR_description.txt
+
+      - name: Search PR description in cache
+        id: cache
+        if: steps.save_pr_description.outcome == 'success'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/firefliesai/.github/PR_description.txt
+          key: cache-pr-${{ github.event.pull_request.number }}-${{ hashFiles('./firefliesai/.github/PR_description.txt') }}
+
+      - name: Cache hit
+        if: steps.save_pr_description.outcome == 'success' && steps.cache.outputs.cache-hit == 'true'
+        run: echo "Cache hit for PR description, skipping PR Reviewer"
+
+      - name: Setup Node
+        if: steps.save_pr_description.outcome == 'failure' || steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: https://npm.pkg.github.com
+          scope: '@firefliesai'
+
+      - name: Install packages
+        if: steps.save_pr_description.outcome == 'failure' || steps.cache.outputs.cache-hit != 'true'
+        env:
+          GTP_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          [ -f package.json ] && mv package.json package.json.xx
+          npm install openai@4.66.1 @octokit/rest @slack/web-api@7.5.0 slackify-markdown@4.4.0 @actions/github@6.0.0 @actions/core@1.10.1 node-fetch@cjs outdent@0.8.0
+
+      - name: Run PR Reviewer
+        if: steps.save_pr_description.outcome == 'failure' || steps.cache.outputs.cache-hit != 'true'
+        uses: actions/github-script@v6
+        id: reviewer
+        env:
+          GTP_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          SLACK_CHANNEL_GIT_SECURITY: ${{ secrets.SLACK_CHANNEL_GIT_SECURITY }}
+        with:
+          script: |
+            const { reviewPR } = require('${{ github.workspace }}/firefliesai/.github/scripts/PR_reviewer.js');
+
+            if (!process.env.GTP_TOKEN) {
+               throw new Error('GTP_TOKEN is not set');
+            }
+            if (!process.env.OPENAI_API_KEY) {
+               throw new Error('OPENAI_API_KEY is not set');
+            }
+            if (!process.env.SLACK_TOKEN) {
+               throw new Error('SLACK_TOKEN is not set');
+            }
+            if (!process.env.SLACK_CHANNEL_GIT_SECURITY) {
+               throw new Error('SLACK_CHANNEL_GIT_SECURITY is not set');
+            }
+
+            await reviewPR(context);
