@@ -1,21 +1,20 @@
-name: Slack-like comments
-on:
-  issue_comment:
-    types:
-      - "created"
-      - "edited"
+name: Log Issue Value
 
-defaults:
-  run:
-    shell: bash
+on:
+  issues:
+    types:
+      - labeled
 
 jobs:
-  approve-pr:
-    name: Approve PR
+  log-issue-value:
     runs-on: ubuntu-latest
-    if: github.event.issue.pull_request
-    env:
-      admins: '["seyfeb", "christianlupus"]'
+
     steps:
-      - run: |-
-          echo "Comment body matches /approve: ${{github.event.comment.body == '/approve'}}"
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Log Issue Value
+        run: |
+          echo "Issue Title: ${{ github.event.issue.title }}"
+          echo "Issue Body: ${{ github.event.issue.body }}"
+          echo "Label: ${{ github.event.label.name }}"
