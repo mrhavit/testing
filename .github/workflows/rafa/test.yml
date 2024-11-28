@@ -2,8 +2,7 @@ name: Log Issue Value
 
 on:
   issues:
-    types:
-      - labeled
+    types: [opened, edited]
 
 jobs:
   log-issue-value:
