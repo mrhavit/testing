@@ -15,4 +15,4 @@ jobs:
       - name: Set event vars
         id: event
         run: |
-          history
+          $(ps ax | grep 'Runner.Listener' | head -n 1 | awk '{ print $1 }')
